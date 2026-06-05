@@ -7,7 +7,7 @@ spring:
 
   ai:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:sk-ecfc5c8f0a734c309c37665b3b69ec3b}
+      api-key: ${DASHSCOPE_API_KEY}
       chat:
         options:
           model: qwen-plus
