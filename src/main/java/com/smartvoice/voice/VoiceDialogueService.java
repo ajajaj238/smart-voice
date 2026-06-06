@@ -8,6 +8,9 @@ import com.smartvoice.pronunciation.PronunciationService;
 import com.smartvoice.pronunciation.dto.PronunciationResult;
 import com.smartvoice.session.ConversationTurn;
 import com.smartvoice.session.ConversationTurnMapper;
+import com.smartvoice.session.Session;
+import com.smartvoice.session.SessionMapper;
+import com.smartvoice.shared.enums.SessionStatus;
 import com.smartvoice.voice.asr.AsrService;
 import com.smartvoice.voice.dto.AsrResponse;
 import com.smartvoice.voice.dto.TtsResponse;
@@ -31,6 +34,7 @@ public class VoiceDialogueService {
     private final PronunciationService pronunciationService;
     private final CorrectionService correctionService;
     private final ConversationTurnMapper turnMapper;
+    private final SessionMapper sessionMapper;
     private final ObjectMapper objectMapper;
 
     public VoiceDialogueResponse process(
@@ -42,6 +46,7 @@ public class VoiceDialogueService {
             String referenceText,
             String voice
     ) {
+        ensureSessionCanAcceptVoice(sessionId);
         AsrResponse asr = asrService.transcribe(audio, transcriptHint, language, durationMs);
         PronunciationResult pronunciation = pronunciationService.evaluate(
                 asr.text(),
@@ -62,6 +67,16 @@ public class VoiceDialogueService {
                 pronunciation,
                 correction
         );
+    }
+
+    private void ensureSessionCanAcceptVoice(String sessionId) {
+        Session session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new IllegalArgumentException("Session not found.");
+        }
+        if (session.getStatus() == SessionStatus.COMPLETED) {
+            throw new IllegalStateException("This session has already generated a report. Please create a new session before recording again.");
+        }
     }
 
     private void enrichTurn(ConversationTurn turn, PronunciationResult pronunciation, CorrectionResult correction) {
