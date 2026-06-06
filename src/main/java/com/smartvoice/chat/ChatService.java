@@ -28,6 +28,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ChatService {
 
+    private static final int MAX_RECENT_CONTEXT_TURNS = 8;
+
     private final SessionMapper sessionMapper;
     private final ScenarioMapper scenarioMapper;
     private final ConversationTurnMapper turnMapper;
@@ -52,7 +54,15 @@ public class ChatService {
 
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(systemPrompt));
-        for (ConversationTurn turn : previousTurns) {
+        List<ConversationTurn> contextTurns = previousTurns;
+        if (previousTurns.size() > MAX_RECENT_CONTEXT_TURNS) {
+            messages.add(new SystemMessage(buildConversationSummary(previousTurns.subList(
+                    0,
+                    previousTurns.size() - MAX_RECENT_CONTEXT_TURNS
+            ))));
+            contextTurns = previousTurns.subList(previousTurns.size() - MAX_RECENT_CONTEXT_TURNS, previousTurns.size());
+        }
+        for (ConversationTurn turn : contextTurns) {
             if (turn.getUserText() != null) {
                 messages.add(new UserMessage(turn.getUserText()));
             }
@@ -127,5 +137,24 @@ public class ChatService {
                "Language level adjustment: " + levelGuidance + "\n" +
                "Keep your responses concise (1-3 sentences). When the user makes a grammar or expression error, " +
                "gently incorporate the correct form in your response rather than explicitly pointing it out.";
+    }
+
+    private String buildConversationSummary(List<ConversationTurn> olderTurns) {
+        StringBuilder summary = new StringBuilder("Earlier conversation summary for continuity:\n");
+        for (ConversationTurn turn : olderTurns) {
+            if (turn.getUserText() != null && !turn.getUserText().isBlank()) {
+                summary.append("- User: ").append(shorten(turn.getUserText())).append('\n');
+            }
+            if (turn.getAiText() != null && !turn.getAiText().isBlank()) {
+                summary.append("- AI: ").append(shorten(turn.getAiText())).append('\n');
+            }
+        }
+        summary.append("Continue naturally from the latest turns and do not repeat old questions.");
+        return summary.toString();
+    }
+
+    private String shorten(String text) {
+        String normalized = text.trim().replaceAll("\\s+", " ");
+        return normalized.length() <= 140 ? normalized : normalized.substring(0, 140) + "...";
     }
 }
