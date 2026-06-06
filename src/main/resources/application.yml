@@ -19,6 +19,11 @@ spring:
     password: ${DB_PASSWORD:zhj123456}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  servlet:
+    multipart:
+      max-file-size: ${MAX_UPLOAD_FILE_SIZE:20MB}
+      max-request-size: ${MAX_UPLOAD_REQUEST_SIZE:25MB}
+
   sql:
     init:
       mode: never
@@ -39,6 +44,20 @@ app:
     secret: ${JWT_SECRET:change-me-in-production-use-at-least-256-bits}
     expiration-ms: 86400000
     refresh-expiration-ms: 604800000
+  aliyun:
+    nls:
+      enabled: ${ALIYUN_NLS_ENABLED:true}
+      fallback-enabled: ${ALIYUN_NLS_FALLBACK_ENABLED:false}
+      app-key: ${NLS_APP_KEY:${ALIYUN_NLS_APP_KEY:${NLS_APPKEY:}}}
+      access-key-id: ${ALIYUN_AK_ID:${ALIBABA_CLOUD_ACCESS_KEY_ID:${ALIYUN_ACCESS_KEY_ID:}}}
+      access-key-secret: ${ALIYUN_AK_SECRET:${ALIBABA_CLOUD_ACCESS_KEY_SECRET:${ALIYUN_ACCESS_KEY_SECRET:}}}
+      gateway-url: ${NLS_GATEWAY_URL:wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1}
+      sample-rate: ${NLS_SAMPLE_RATE:16000}
+      tts-voice: ${NLS_TTS_VOICE:zhixiaobai}
+      tts-format: ${NLS_TTS_FORMAT:wav}
+      tts-volume: ${NLS_TTS_VOLUME:50}
+      tts-speech-rate: ${NLS_TTS_SPEECH_RATE:0}
+      tts-pitch-rate: ${NLS_TTS_PITCH_RATE:0}
 
 springdoc:
   api-docs:

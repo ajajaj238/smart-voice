@@ -22,6 +22,7 @@
         <mybatis-plus.version>3.5.7</mybatis-plus.version>
         <springdoc.version>2.5.0</springdoc.version>
         <spring-ai-alibaba.version>1.0.0-M5.1</spring-ai-alibaba.version>
+        <aliyun-nls.version>2.2.19</aliyun-nls.version>
     </properties>
 
     <dependencies>
@@ -47,6 +48,16 @@
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter</artifactId>
             <version>${spring-ai-alibaba.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.nls</groupId>
+            <artifactId>nls-sdk-recognizer</artifactId>
+            <version>${aliyun-nls.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.nls</groupId>
+            <artifactId>nls-sdk-tts</artifactId>
+            <version>${aliyun-nls.version}</version>
         </dependency>
         <dependency>
             <groupId>com.baomidou</groupId>
