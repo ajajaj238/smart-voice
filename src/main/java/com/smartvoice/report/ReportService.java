@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 public class ReportService {
 
     private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final BigDecimal MAX_DECIMAL_3_1_SCORE = BigDecimal.valueOf(99.9);
 
     private final SessionMapper sessionMapper;
     private final ConversationTurnMapper turnMapper;
@@ -233,7 +234,8 @@ public class ReportService {
     }
 
     private BigDecimal score(double value) {
-        return BigDecimal.valueOf(Math.max(0, Math.min(100, value))).setScale(1, RoundingMode.HALF_UP);
+        BigDecimal normalized = BigDecimal.valueOf(Math.max(0, Math.min(100, value))).setScale(1, RoundingMode.HALF_UP);
+        return normalized.compareTo(MAX_DECIMAL_3_1_SCORE) > 0 ? MAX_DECIMAL_3_1_SCORE : normalized;
     }
 
     private List<String> buildStrengths(BigDecimal pronunciation, BigDecimal fluency, BigDecimal grammar,
