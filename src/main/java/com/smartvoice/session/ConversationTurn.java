@@ -20,6 +20,8 @@ public class ConversationTurn {
     private String aiText;
     private String userAudioUrl;
     private String aiAudioUrl;
+    private BigDecimal asrConfidence;
+    private Integer asrDurationMs;
     private BigDecimal pronunciationScore;
     private BigDecimal fluencyScore;
     private String grammarIssues;
