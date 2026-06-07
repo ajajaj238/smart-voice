@@ -2,6 +2,7 @@
 
 AI 口语练习系统，支持用户注册登录、场景化英语对话、语音识别、AI 回复、语音合成、逐句反馈、课后总结和学习进度统计。
 
+demo演示：https://www.bilibili.com/video/BV1mfEt63Em8/?spm_id_from=333.1387.list.card_archive.click&vd_source=ffaaf88706f94ac540b64bc146162a7f
 ## 功能特性
 
 - 用户认证：注册、登录、刷新 Token、查看与更新个人资料
