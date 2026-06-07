@@ -1,4 +1,14 @@
-import type { ApiResponse, AuthResponse, PracticeSession, Scenario, SessionReport, VoiceDialogueResponse } from "./types";
+import type {
+  ApiResponse,
+  AuthResponse,
+  PageResponse,
+  PracticeSession,
+  Scenario,
+  SessionDetail,
+  SessionReport,
+  UserProfile,
+  VoiceDialogueResponse
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -20,7 +30,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload: any = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+  }
 
   if (!response.ok) {
     throw new Error(payload?.message ?? payload?.error ?? `HTTP ${response.status}`);
@@ -39,12 +56,39 @@ export function listScenarios(token: string) {
   return request<Scenario[]>("/api/v1/scenarios", { token });
 }
 
+export function getCurrentUser(token: string) {
+  return request<UserProfile>("/api/v1/users/me", { token });
+}
+
+export function updateCurrentUser(token: string, profile: { email?: string; englishLevel?: string; avatarUrl?: string }) {
+  return request<UserProfile>("/api/v1/users/me", {
+    method: "PUT",
+    token,
+    body: JSON.stringify(profile)
+  });
+}
+
 export function createSession(token: string, scenarioId: string, difficulty: string) {
   return request<PracticeSession>("/api/v1/sessions", {
     method: "POST",
     token,
     body: JSON.stringify({ scenarioId, difficulty })
   });
+}
+
+export function listSessions(token: string, page = 1, size = 8) {
+  return request<PageResponse<PracticeSession>>(`/api/v1/sessions?page=${page}&size=${size}`, { token });
+}
+
+export function getSessionDetail(token: string, sessionId: string) {
+  return request<SessionDetail>(`/api/v1/sessions/${sessionId}/detail`, { token })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("Resource not found") && !message.includes("No static resource") && !message.includes("HTTP 404")) {
+        throw error;
+      }
+      return request<SessionDetail>(`/api/v1/sessions/detail/${sessionId}`, { token });
+    });
 }
 
 export function sendVoiceDialogue(params: {
@@ -72,6 +116,12 @@ export function sendVoiceDialogue(params: {
 export function generateReport(token: string, sessionId: string) {
   return request<ApiResponse<SessionReport>>(`/api/v1/sessions/${sessionId}/report`, {
     method: "POST",
+    token
+  });
+}
+
+export function getReport(token: string, sessionId: string) {
+  return request<ApiResponse<SessionReport>>(`/api/v1/sessions/${sessionId}/report`, {
     token
   });
 }

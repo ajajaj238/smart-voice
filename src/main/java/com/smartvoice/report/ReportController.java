@@ -21,13 +21,19 @@ public class ReportController {
     private final ReportService reportService;
 
     @PostMapping("/sessions/{sessionId}/report")
-    public ResponseEntity<ApiResponse<SessionReportResponse>> generateSessionReport(@PathVariable String sessionId) {
-        return ResponseEntity.ok(ApiResponse.ok(SessionReportResponse.from(reportService.generateSessionReport(sessionId))));
+    public ResponseEntity<ApiResponse<SessionReportResponse>> generateSessionReport(
+            @PathVariable String sessionId,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.ok(SessionReportResponse.from(
+                reportService.generateSessionReport(sessionId, authentication.getPrincipal().toString()))));
     }
 
     @GetMapping("/sessions/{sessionId}/report")
-    public ResponseEntity<ApiResponse<SessionReportResponse>> getSessionReport(@PathVariable String sessionId) {
-        return ResponseEntity.ok(ApiResponse.ok(SessionReportResponse.from(reportService.getSessionReport(sessionId))));
+    public ResponseEntity<ApiResponse<SessionReportResponse>> getSessionReport(
+            @PathVariable String sessionId,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.ok(SessionReportResponse.from(
+                reportService.getSessionReport(sessionId, authentication.getPrincipal().toString()))));
     }
 
     @GetMapping("/progress/overview")

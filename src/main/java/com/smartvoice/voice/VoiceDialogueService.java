@@ -39,6 +39,7 @@ public class VoiceDialogueService {
 
     public VoiceDialogueResponse process(
             String sessionId,
+            String userId,
             MultipartFile audio,
             String transcriptHint,
             String language,
@@ -46,7 +47,7 @@ public class VoiceDialogueService {
             String referenceText,
             String voice
     ) {
-        ensureSessionCanAcceptVoice(sessionId);
+        validateSessionCanAcceptVoice(sessionId, userId);
         AsrResponse asr = asrService.transcribe(audio, transcriptHint, language, durationMs);
         PronunciationResult pronunciation = pronunciationService.evaluate(
                 asr.text(),
@@ -54,7 +55,7 @@ public class VoiceDialogueService {
                 asr.durationMs()
         );
         CorrectionResult correction = correctionService.correct(asr.text(), "voice dialogue", "intermediate");
-        ConversationTurn turn = chatService.processMessage(sessionId, asr.text());
+        ConversationTurn turn = chatService.processMessage(sessionId, asr.text(), userId);
         TtsResponse tts = ttsService.synthesize(turn.getAiText(), voice, "wav");
         enrichTurn(turn, pronunciation, correction);
 
@@ -69,10 +70,13 @@ public class VoiceDialogueService {
         );
     }
 
-    private void ensureSessionCanAcceptVoice(String sessionId) {
+    public void validateSessionCanAcceptVoice(String sessionId, String userId) {
         Session session = sessionMapper.selectById(sessionId);
         if (session == null) {
             throw new IllegalArgumentException("Session not found.");
+        }
+        if (!session.getUserId().equals(userId)) {
+            throw new SecurityException("You do not have permission to access this session.");
         }
         if (session.getStatus() == SessionStatus.COMPLETED) {
             throw new IllegalStateException("This session has already generated a report. Please create a new session before recording again.");
