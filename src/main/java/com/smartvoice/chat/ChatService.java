@@ -35,9 +35,12 @@ public class ChatService {
     private final ConversationTurnMapper turnMapper;
     private final ChatClient chatClient;
 
-    private List<Message> buildMessages(String sessionId, String userText) {
+    private List<Message> buildMessages(String sessionId, String userText, String userId) {
         Session session = sessionMapper.selectById(sessionId);
         if (session == null) throw new RuntimeException("Session not found");
+        if (userId != null && !session.getUserId().equals(userId)) {
+            throw new SecurityException("You do not have permission to access this session.");
+        }
         if (session.getStatus() == SessionStatus.COMPLETED) {
             throw new RuntimeException("Session already ended");
         }
@@ -77,7 +80,12 @@ public class ChatService {
 
     @Transactional
     public ConversationTurn processMessage(String sessionId, String userText) {
-        List<Message> messages = buildMessages(sessionId, userText);
+        return processMessage(sessionId, userText, null);
+    }
+
+    @Transactional
+    public ConversationTurn processMessage(String sessionId, String userText, String userId) {
+        List<Message> messages = buildMessages(sessionId, userText, userId);
 
         String aiResponse = chatClient.prompt()
                 .messages(messages)
@@ -117,8 +125,16 @@ public class ChatService {
 
     @Transactional
     public Session endSession(String sessionId) {
+        return endSession(sessionId, null);
+    }
+
+    @Transactional
+    public Session endSession(String sessionId, String userId) {
         Session session = sessionMapper.selectById(sessionId);
         if (session == null) throw new RuntimeException("Session not found");
+        if (userId != null && !session.getUserId().equals(userId)) {
+            throw new SecurityException("You do not have permission to access this session.");
+        }
         session.setStatus(SessionStatus.COMPLETED);
         session.setEndedAt(Instant.now());
         session.setDurationSec((int) Duration.between(session.getStartedAt(), Instant.now()).getSeconds());

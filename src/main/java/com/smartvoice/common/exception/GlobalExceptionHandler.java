@@ -8,6 +8,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -41,6 +42,20 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.PAYLOAD_TOO_LARGE,
                 "Uploaded file is too large. Please use a shorter audio file or increase MAX_UPLOAD_FILE_SIZE.",
                 request.getRequestURI());
+    }
+
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<Map<String, Object>> handleForbidden(
+            SecurityException exception,
+            HttpServletRequest request) {
+        return buildResponse(HttpStatus.FORBIDDEN, exception.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(
+            NoResourceFoundException exception,
+            HttpServletRequest request) {
+        return buildResponse(HttpStatus.NOT_FOUND, "Resource not found.", request.getRequestURI());
     }
 
     @ExceptionHandler(IllegalStateException.class)

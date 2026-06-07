@@ -5,8 +5,14 @@ export type AuthResponse = {
   user: {
     id: string;
     username: string;
+    email?: string;
     englishLevel: string;
   };
+};
+
+export type UserProfile = AuthResponse["user"] & {
+  email?: string;
+  avatarUrl?: string;
 };
 
 export type Scenario = {
@@ -24,6 +30,32 @@ export type PracticeSession = {
   scenarioId: string;
   status: string;
   difficulty: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationSec?: number;
+};
+
+export type PageResponse<T> = {
+  records: T[];
+  total: number;
+  size: number;
+  current: number;
+  pages: number;
+};
+
+export type ConversationTurnHistory = {
+  id: string;
+  turnIndex: number;
+  userText: string;
+  aiText: string;
+  pronunciationScore?: number;
+  fluencyScore?: number;
+  grammarIssues?: string;
+  createdAt?: string;
+};
+
+export type SessionDetail = PracticeSession & {
+  turns: ConversationTurnHistory[];
 };
 
 export type TtsResponse = {
