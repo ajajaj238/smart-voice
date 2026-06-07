@@ -203,6 +203,13 @@ p {
   letter-spacing: 0.08em;
 }
 
+.panel-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
 .profile-block {
   display: grid;
   gap: 8px;
@@ -222,6 +229,57 @@ p {
 .ghost-button {
   background: transparent;
   color: var(--ink);
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  color: var(--clay);
+  padding: 0;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.text-button:hover:not(:disabled) {
+  box-shadow: none;
+}
+
+.profile-editor {
+  background: rgba(255, 252, 244, 0.42);
+  padding: 12px;
+  border: 1px solid var(--line);
+}
+
+.profile-editor summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.profile-editor summary::-webkit-details-marker {
+  display: none;
+}
+
+.profile-editor summary span {
+  font-size: 1rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.profile-editor summary small {
+  color: var(--clay);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.profile-form {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
 }
 
 .muted,
@@ -261,6 +319,28 @@ p {
 .report-button {
   background: var(--reed);
   color: var(--ink);
+}
+
+.history-panel {
+  border-bottom: 0;
+}
+
+.history-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  background: rgba(255, 252, 244, 0.68);
+  color: var(--ink);
+  text-align: left;
+  border-color: var(--line);
+}
+
+.history-item span {
+  font-weight: 900;
+}
+
+.history-item small {
+  color: rgba(19, 32, 27, 0.62);
 }
 
 .practice-stage {
@@ -521,6 +601,26 @@ audio {
 
 .report-columns p {
   line-height: 1.55;
+}
+
+.history-modal {
+  width: min(980px, 100%);
+}
+
+.history-dialogue {
+  display: grid;
+  gap: 14px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 18px;
+  margin: 20px 0;
+  background: rgba(233, 239, 232, 0.72);
+  border: 1px solid var(--line);
+}
+
+.history-report {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
 }
 
 @media (max-width: 1080px) {

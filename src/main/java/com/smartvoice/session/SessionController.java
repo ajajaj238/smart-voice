@@ -2,6 +2,7 @@ package com.smartvoice.session;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.smartvoice.session.dto.CreateSessionRequest;
+import com.smartvoice.session.dto.SessionDetailResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -20,8 +21,13 @@ public class SessionController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Session> getById(@PathVariable String id) {
-        return ResponseEntity.ok(sessionService.getById(id));
+    public ResponseEntity<Session> getById(@PathVariable String id, Authentication auth) {
+        return ResponseEntity.ok(sessionService.getOwnedById(auth.getPrincipal().toString(), id));
+    }
+
+    @GetMapping({"/{id}/detail", "/detail/{id}"})
+    public ResponseEntity<SessionDetailResponse> getDetail(@PathVariable String id, Authentication auth) {
+        return ResponseEntity.ok(sessionService.getDetail(auth.getPrincipal().toString(), id));
     }
 
     @GetMapping
@@ -32,7 +38,7 @@ public class SessionController {
     }
 
     @PostMapping("/{id}/end")
-    public ResponseEntity<Session> end(@PathVariable String id) {
-        return ResponseEntity.ok(sessionService.end(id));
+    public ResponseEntity<Session> end(@PathVariable String id, Authentication auth) {
+        return ResponseEntity.ok(sessionService.end(auth.getPrincipal().toString(), id));
     }
 }
