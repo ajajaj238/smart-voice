@@ -4,6 +4,8 @@ import com.smartvoice.common.config.JwtTokenProvider;
 import com.smartvoice.user.dto.AuthResponse;
 import com.smartvoice.user.dto.LoginRequest;
 import com.smartvoice.user.dto.RegisterRequest;
+import com.smartvoice.user.dto.UpdateProfileRequest;
+import com.smartvoice.user.dto.UserProfileResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -44,14 +46,17 @@ public class UserController {
     }
 
     @GetMapping("/users/me")
-    public ResponseEntity<Map<String, Object>> getCurrentUser(Authentication auth) {
+    public ResponseEntity<UserProfileResponse> getCurrentUser(Authentication auth) {
         User user = userService.getById(auth.getPrincipal().toString());
-        return ResponseEntity.ok(Map.of(
-                "id", user.getId(),
-                "username", user.getUsername(),
-                "email", user.getEmail(),
-                "englishLevel", user.getEnglishLevel().name()
-        ));
+        return ResponseEntity.ok(UserProfileResponse.from(user));
+    }
+
+    @PutMapping("/users/me")
+    public ResponseEntity<UserProfileResponse> updateCurrentUser(
+            Authentication auth,
+            @Valid @RequestBody UpdateProfileRequest request) {
+        User user = userService.updateProfile(auth.getPrincipal().toString(), request);
+        return ResponseEntity.ok(UserProfileResponse.from(user));
     }
 
     private AuthResponse buildAuthResponse(User user) {

@@ -46,7 +46,12 @@ public class ReportService {
 
     @Transactional
     public SessionReport generateSessionReport(String sessionId) {
-        Session session = requireSession(sessionId);
+        return generateSessionReport(sessionId, null);
+    }
+
+    @Transactional
+    public SessionReport generateSessionReport(String sessionId, String userId) {
+        Session session = requireOwnedSession(sessionId, userId);
         List<ConversationTurn> turns = listTurns(sessionId);
         if (turns.isEmpty()) {
             throw new IllegalArgumentException("Cannot generate report because this session has no conversation turns.");
@@ -90,6 +95,11 @@ public class ReportService {
     }
 
     public SessionReport getSessionReport(String sessionId) {
+        return getSessionReport(sessionId, null);
+    }
+
+    public SessionReport getSessionReport(String sessionId, String userId) {
+        requireOwnedSession(sessionId, userId);
         SessionReport report = findBySessionId(sessionId);
         if (report == null) {
             throw new IllegalArgumentException("Session report not found. Generate it first.");
@@ -125,6 +135,14 @@ public class ReportService {
         Session session = sessionMapper.selectById(sessionId);
         if (session == null) {
             throw new IllegalArgumentException("Session not found.");
+        }
+        return session;
+    }
+
+    private Session requireOwnedSession(String sessionId, String userId) {
+        Session session = requireSession(sessionId);
+        if (userId != null && !session.getUserId().equals(userId)) {
+            throw new SecurityException("You do not have permission to access this session.");
         }
         return session;
     }

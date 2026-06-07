@@ -1,8 +1,10 @@
 package com.smartvoice.user;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.smartvoice.shared.enums.EnglishLevel;
 import com.smartvoice.user.dto.LoginRequest;
 import com.smartvoice.user.dto.RegisterRequest;
+import com.smartvoice.user.dto.UpdateProfileRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -45,5 +47,21 @@ public class UserService {
         User user = userMapper.selectById(id);
         if (user == null) throw new RuntimeException("User not found");
         return user;
+    }
+
+    @Transactional
+    public User updateProfile(String userId, UpdateProfileRequest request) {
+        User user = getById(userId);
+        user.setEmail(blankToNull(request.getEmail()));
+        user.setAvatarUrl(blankToNull(request.getAvatarUrl()));
+        if (request.getEnglishLevel() != null && !request.getEnglishLevel().isBlank()) {
+            user.setEnglishLevel(EnglishLevel.valueOf(request.getEnglishLevel().toUpperCase()));
+        }
+        userMapper.updateById(user);
+        return user;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 }

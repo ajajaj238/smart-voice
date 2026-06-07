@@ -15,6 +15,7 @@ import com.smartvoice.voice.tts.TtsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -91,9 +92,11 @@ public class VoiceController {
             @RequestParam(value = "language", required = false) String language,
             @RequestParam(value = "durationMs", required = false) Integer durationMs,
             @RequestParam(value = "referenceText", required = false) String referenceText,
-            @RequestParam(value = "voice", required = false) String voice) {
+            @RequestParam(value = "voice", required = false) String voice,
+            Authentication auth) {
         return ResponseEntity.ok(voiceDialogueService.process(
                 sessionId,
+                auth.getPrincipal().toString(),
                 audio,
                 transcriptHint,
                 language,
@@ -106,11 +109,14 @@ public class VoiceController {
     @PostMapping(value = "/dialogue/{sessionId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter dialogueStream(
             @PathVariable String sessionId,
-            @RequestBody VoiceDialogueStreamRequest request) {
+            @RequestBody VoiceDialogueStreamRequest request,
+            Authentication auth) {
         SseEmitter emitter = new SseEmitter(120000L);
+        String userId = auth.getPrincipal().toString();
 
         CompletableFuture.runAsync(() -> {
             try {
+                voiceDialogueService.validateSessionCanAcceptVoice(sessionId, userId);
                 AsrResponse asr = asrService.transcribe(
                         null,
                         request.transcriptHint(),
@@ -128,7 +134,7 @@ public class VoiceController {
                 emitter.send(SseEmitter.event().name("correction")
                         .data(correctionService.correct(asr.text(), "voice dialogue", "intermediate")));
 
-                var turn = chatService.processMessage(sessionId, asr.text());
+                var turn = chatService.processMessage(sessionId, asr.text(), userId);
                 String aiText = turn.getAiText() == null ? "" : turn.getAiText();
                 for (int i = 0; i < aiText.length(); i += 4) {
                     int end = Math.min(i + 4, aiText.length());

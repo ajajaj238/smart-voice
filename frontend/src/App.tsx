@@ -1,7 +1,18 @@
 import { createElement, useEffect, useRef, useState } from "react";
 import { base64ToAudioUrl, encodeWavFromFloat32, parseJsonList } from "./audio";
-import { createSession, generateReport, listScenarios, login, sendVoiceDialogue } from "./api";
-import type { AuthResponse, PracticeSession, Scenario, SessionReport, VoiceDialogueResponse } from "./types";
+import {
+  createSession,
+  generateReport,
+  getCurrentUser,
+  getReport,
+  getSessionDetail,
+  listScenarios,
+  listSessions,
+  login,
+  sendVoiceDialogue,
+  updateCurrentUser
+} from "./api";
+import type { ConversationTurnHistory, PracticeSession, Scenario, SessionDetail, SessionReport, UserProfile, VoiceDialogueResponse } from "./types";
 
 type Turn = VoiceDialogueResponse & {
   audioUrl?: string;
@@ -11,7 +22,7 @@ type WebAudioWindow = Window & {
   webkitAudioContext?: typeof AudioContext;
 };
 
-type UserProfile = AuthResponse["user"];
+const HISTORY_CACHE_KEY = "smartVoiceHistoryCache";
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("smartVoiceToken") ?? "");
@@ -24,8 +35,17 @@ export default function App() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [report, setReport] = useState<SessionReport | null>(null);
   const [isReportOpen, setIsReportOpen] = useState(false);
+  const [historySessions, setHistorySessions] = useState<PracticeSession[]>([]);
+  const [historyDetail, setHistoryDetail] = useState<SessionDetail | null>(null);
+  const [historyReport, setHistoryReport] = useState<SessionReport | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [profileEmail, setProfileEmail] = useState("");
+  const [profileLevel, setProfileLevel] = useState("INTERMEDIATE");
   const [isRecording, setIsRecording] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [error, setError] = useState("");
   const [recordStartedAt, setRecordStartedAt] = useState<number | null>(null);
 
@@ -37,17 +57,18 @@ export default function App() {
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
   const selectedScenario = scenarios.find((scenario) => scenario.id === selectedScenarioId);
+  const scenarioForCreate = selectedScenario ?? scenarios[0];
   const latestTurn = turns.length > 0 ? turns[turns.length - 1] : undefined;
   const isSessionCompleted = session?.status === "COMPLETED";
 
   useEffect(() => {
     if (!token) return;
-    listScenarios(token)
-      .then((data) => {
-        setScenarios(data);
-        setSelectedScenarioId((current) => current || data[0]?.id || "");
-      })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load scenarios"));
+    void loadScenarioOptions();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    void refreshAccountData();
   }, [token]);
 
   useEffect(() => {
@@ -67,6 +88,8 @@ export default function App() {
       localStorage.setItem("smartVoiceUser", JSON.stringify(auth.user));
       setToken(auth.accessToken);
       setCurrentUser(auth.user);
+      setProfileEmail(auth.user.email ?? "");
+      setProfileLevel(auth.user.englishLevel ?? "INTERMEDIATE");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -83,23 +106,84 @@ export default function App() {
     setTurns([]);
     setReport(null);
     setIsReportOpen(false);
+    setHistorySessions([]);
+    setHistoryDetail(null);
+    setHistoryReport(null);
+    setIsHistoryOpen(false);
     setError("");
   }
 
-  async function handleCreateSession() {
-    if (!selectedScenarioId) return;
+  async function refreshAccountData() {
+    try {
+      const [profile, history] = await Promise.all([
+        getCurrentUser(token),
+        listSessions(token)
+      ]);
+      setCurrentUser(profile);
+      localStorage.setItem("smartVoiceUser", JSON.stringify(profile));
+      setProfileEmail(profile.email ?? "");
+      setProfileLevel(profile.englishLevel ?? "INTERMEDIATE");
+      setHistorySessions(history.records);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load account data");
+    }
+  }
+
+  async function loadScenarioOptions() {
     setError("");
-    setIsBusy(true);
+    try {
+      const data = await listScenarios(token);
+      setScenarios(data);
+      setSelectedScenarioId((current) => {
+        if (current && data.some((scenario) => scenario.id === current)) {
+          return current;
+        }
+        return data[0]?.id || "";
+      });
+    } catch (err) {
+      setScenarios([]);
+      setSelectedScenarioId("");
+      setError(err instanceof Error ? err.message : "Failed to load scenarios");
+    }
+  }
+
+  async function handleSaveProfile() {
+    setIsProfileSaving(true);
+    setError("");
+    try {
+      const profile = await updateCurrentUser(token, {
+        email: profileEmail,
+        englishLevel: profileLevel
+      });
+      setCurrentUser(profile);
+      localStorage.setItem("smartVoiceUser", JSON.stringify(profile));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update profile");
+    } finally {
+      setIsProfileSaving(false);
+    }
+  }
+
+  async function handleCreateSession() {
+    const scenarioId = selectedScenarioId || scenarioForCreate?.id;
+    if (!scenarioId) {
+      setError("暂无可用训练场景，请先初始化 scenarios 表数据。");
+      return;
+    }
+    setError("");
+    setIsCreatingSession(true);
     setReport(null);
     setIsReportOpen(false);
     setTurns([]);
     try {
-      const created = await createSession(token, selectedScenarioId, selectedScenario?.difficulty ?? "BEGINNER");
+      const created = await createSession(token, scenarioId, scenarioForCreate?.difficulty ?? "BEGINNER");
       setSession(created);
+      setSelectedScenarioId(scenarioId);
+      await refreshAccountData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create session");
     } finally {
-      setIsBusy(false);
+      setIsCreatingSession(false);
     }
   }
 
@@ -174,14 +258,17 @@ export default function App() {
         token,
         sessionId: session.id,
         audio,
-        referenceText: selectedScenario?.suggestedPrompts?.[0],
         durationMs,
         voice: "zhixiaobai"
       });
       const audioUrl = response.tts?.audioContentBase64
         ? base64ToAudioUrl(response.tts.audioContentBase64, response.tts.mimeType)
         : undefined;
-      setTurns((current) => [...current, { ...response, audioUrl }]);
+      setTurns((current) => {
+        const nextTurns = [...current, { ...response, audioUrl }];
+        cacheSessionDetail(session, nextTurns);
+        return nextTurns;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Voice request failed");
     } finally {
@@ -198,12 +285,83 @@ export default function App() {
       const response = await generateReport(token, session.id);
       setReport(response.data);
       setIsReportOpen(true);
-      setSession((current) => current ? { ...current, status: "COMPLETED" } : current);
+      setSession((current) => {
+        const nextSession = current ? { ...current, status: "COMPLETED" } : current;
+        if (nextSession) {
+          cacheSessionDetail(nextSession, turns);
+        }
+        return nextSession;
+      });
+      await refreshAccountData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate report");
     } finally {
       setIsBusy(false);
     }
+  }
+
+  async function handleOpenHistory(item: PracticeSession) {
+    setIsHistoryLoading(true);
+    setError("");
+    try {
+      const detail = await loadSessionDetail(item);
+      setHistoryDetail(detail);
+      if (item.status === "COMPLETED") {
+        try {
+          const reportResponse = await getReport(token, item.id);
+          setHistoryReport(reportResponse.data);
+        } catch {
+          setHistoryReport(null);
+        }
+      } else {
+        setHistoryReport(null);
+      }
+      setIsHistoryOpen(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load history";
+      setError(message.includes("Resource not found") || message.includes("No static resource") || message.includes("HTTP 404")
+        ? "历史详情接口不可用，请重启后端后再查看历史对话。"
+        : message);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }
+
+  async function loadSessionDetail(item: PracticeSession) {
+    try {
+      const detail = await getSessionDetail(token, item.id);
+      const cachedDetail = readCachedSessionDetail(item.id);
+      if (item.id === session?.id && turns.length > detail.turns.length) {
+        return buildCurrentSessionDetail(item);
+      }
+      if (cachedDetail && cachedDetail.turns.length > detail.turns.length) {
+        return { ...item, ...cachedDetail };
+      }
+      return detail;
+    } catch (err) {
+      if (item.id === session?.id && turns.length > 0) {
+        return buildCurrentSessionDetail(item);
+      }
+      const cachedDetail = readCachedSessionDetail(item.id);
+      if (cachedDetail?.turns.length) {
+        return { ...item, ...cachedDetail };
+      }
+      throw err;
+    }
+  }
+
+  function buildCurrentSessionDetail(item: PracticeSession): SessionDetail {
+    return {
+      ...item,
+      turns: turns.map((turn) => ({
+        id: `${turn.sessionId}-${turn.turnIndex}`,
+        turnIndex: turn.turnIndex,
+        userText: turn.asr.text || "本轮未识别到有效文本",
+        aiText: turn.aiText,
+        pronunciationScore: turn.pronunciation.pronunciationScore,
+        fluencyScore: turn.pronunciation.fluencyScore
+      }))
+    };
   }
 
   if (!token) {
@@ -253,27 +411,52 @@ export default function App() {
           <div className="profile-block">
             <span>欢迎，{currentUser?.username || username}</span>
             <small>{currentUser?.englishLevel || "ENGLISH"} 训练档案</small>
-            <button className="ghost-button" onClick={handleLogout} disabled={isBusy || isRecording}>
+            <button className="ghost-button" onClick={handleLogout} disabled={isBusy || isRecording || isProfileSaving || isHistoryLoading || isCreatingSession}>
               退出登录
             </button>
           </div>
+
+          <details className="panel-block profile-editor">
+            <summary>
+              <span>用户资料</span>
+              <small>{isProfileSaving ? "保存中" : "编辑"}</small>
+            </summary>
+            <div className="profile-form">
+              <label>
+                邮箱
+                <input value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} placeholder="可选" disabled={isProfileSaving} />
+              </label>
+              <label>
+                英语等级
+                <select value={profileLevel} onChange={(event) => setProfileLevel(event.target.value)} disabled={isProfileSaving}>
+                  <option value="BEGINNER">BEGINNER</option>
+                  <option value="INTERMEDIATE">INTERMEDIATE</option>
+                  <option value="ADVANCED">ADVANCED</option>
+                </select>
+              </label>
+              <button className="ghost-button" onClick={handleSaveProfile} disabled={isProfileSaving}>
+                {isProfileSaving ? "保存中..." : "保存资料"}
+              </button>
+            </div>
+          </details>
 
           <div className="panel-block">
             <h2>训练场景</h2>
             <select value={selectedScenarioId} onChange={(event) => setSelectedScenarioId(event.target.value)}>
               {scenarios.map((scenario) => createElement("option", { key: scenario.id, value: scenario.id }, scenario.titleCn || scenario.title))}
             </select>
+            {scenarios.length === 0 && <p className="hint">暂无可用训练场景，请先初始化 scenarios 表数据。</p>}
             {selectedScenario && <p className="muted">{selectedScenario.description}</p>}
             {selectedScenario?.suggestedPrompts?.length ? (
               <div className="prompt-list">
-                <span>推荐开场句</span>
+                <span>可参考表达</span>
                 {selectedScenario.suggestedPrompts.slice(0, 3).map((prompt, index) =>
                   createElement("p", { key: `prompt-${index}` }, prompt)
                 )}
               </div>
             ) : null}
-            <button onClick={handleCreateSession} disabled={!token || isBusy || !selectedScenarioId}>
-              创建会话
+            <button onClick={handleCreateSession} disabled={isCreatingSession || scenarios.length === 0}>
+              {isCreatingSession ? "创建中..." : "创建会话"}
             </button>
           </div>
 
@@ -292,6 +475,28 @@ export default function App() {
           <button className="report-button" onClick={handleGenerateReport} disabled={!session || turns.length === 0 || isBusy}>
             生成课后总结
           </button>
+
+          <div className="panel-block history-panel">
+            <div className="panel-title-row">
+              <h2>历史记录</h2>
+              <button className="text-button" onClick={refreshAccountData} disabled={isHistoryLoading}>刷新</button>
+            </div>
+            {historySessions.length ? (
+              historySessions.map((item) => {
+                const scenario = scenarios.find((candidate) => candidate.id === item.scenarioId);
+                return createElement(
+                  "button",
+                  { className: "history-item", key: item.id, onClick: () => void handleOpenHistory(item), disabled: isHistoryLoading },
+                  <>
+                    <span>{scenario?.titleCn || scenario?.title || item.scenarioId}</span>
+                    <small>{item.status} · {item.difficulty}</small>
+                  </>
+                );
+              })
+            ) : (
+              <p className="hint">暂无历史练习。</p>
+            )}
+          </div>
         </aside>
 
         <section className="practice-stage">
@@ -426,8 +631,99 @@ export default function App() {
           </section>
         </div>
       )}
+
+      {historyDetail && isHistoryOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="history-title">
+          <section className="report-modal history-modal">
+            <button className="modal-close" onClick={() => setIsHistoryOpen(false)} aria-label="关闭历史记录">
+              ×
+            </button>
+            <div className="report-header">
+              <span className="label">历史记录</span>
+              <h2 id="history-title">历史对话回看</h2>
+              <p>{historyDetail.status} · {historyDetail.difficulty} · {historyDetail.turns.length} 轮对话</p>
+            </div>
+            <div className="history-dialogue">
+              {historyDetail.turns.length ? (
+                historyDetail.turns.flatMap((turn) => [
+                  createElement(
+                    "div",
+                    { className: "message-row user-message", key: `${turn.id}-user` },
+                    <div className="message-stack">
+                      <span className="message-name">我</span>
+                      <div className="message-bubble"><p>{turn.userText}</p></div>
+                    </div>
+                  ),
+                  createElement(
+                    "div",
+                    { className: "message-row assistant-message", key: `${turn.id}-assistant` },
+                    <div className="message-stack">
+                      <span className="message-name">AI 陪练</span>
+                      <div className="message-bubble"><p>{turn.aiText}</p></div>
+                    </div>
+                  )
+                ])
+              ) : (
+                <p className="hint">这次会话还没有保存的对话内容。完成一轮录音/对话后，历史记录才会显示用户问题和 AI 回复。</p>
+              )}
+            </div>
+            {historyReport && (
+              <div className="history-report">
+                <h3>历史报告</h3>
+                <p>{historyReport.teacherComment}</p>
+                <div className="report-columns">
+                  <div>
+                    <h3>优势</h3>
+                    {parseJsonList(historyReport.strengths).map((item, index) => createElement("p", { key: `history-strength-${index}` }, item))}
+                  </div>
+                  <div>
+                    <h3>待提升</h3>
+                    {parseJsonList(historyReport.weaknesses).map((item, index) => createElement("p", { key: `history-weakness-${index}` }, item))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
     </main>
   );
+}
+
+function turnToHistory(turn: Turn): ConversationTurnHistory {
+  return {
+    id: `${turn.sessionId}-${turn.turnIndex}`,
+    turnIndex: turn.turnIndex,
+    userText: turn.asr.text || "本轮未识别到有效文本",
+    aiText: turn.aiText,
+    pronunciationScore: turn.pronunciation.pronunciationScore,
+    fluencyScore: turn.pronunciation.fluencyScore
+  };
+}
+
+function cacheSessionDetail(session: PracticeSession, turns: Turn[]) {
+  if (!turns.length) return;
+  const cache = readHistoryCache();
+  cache[session.id] = {
+    ...session,
+    turns: turns.map(turnToHistory)
+  };
+  localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(cache));
+}
+
+function readCachedSessionDetail(sessionId: string): SessionDetail | null {
+  return readHistoryCache()[sessionId] ?? null;
+}
+
+function readHistoryCache(): Record<string, SessionDetail> {
+  const raw = localStorage.getItem(HISTORY_CACHE_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, SessionDetail>;
+  } catch {
+    localStorage.removeItem(HISTORY_CACHE_KEY);
+    return {};
+  }
 }
 
 function ScoreDial({ label, value }: { label: string; value: number }) {
