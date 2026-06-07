@@ -52,6 +52,13 @@ export function login(username: string, password: string) {
   });
 }
 
+export function register(username: string, password: string, email?: string) {
+  return request<AuthResponse>("/api/v1/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username, password, email })
+  });
+}
+
 export function listScenarios(token: string) {
   return request<Scenario[]>("/api/v1/scenarios", { token });
 }

@@ -9,6 +9,7 @@ import {
   listScenarios,
   listSessions,
   login,
+  register,
   sendVoiceDialogue,
   updateCurrentUser
 } from "./api";
@@ -18,17 +19,23 @@ type Turn = VoiceDialogueResponse & {
   audioUrl?: string;
 };
 
+type CorrectionItem = Turn["correction"]["corrections"][number];
+
 type WebAudioWindow = Window & {
   webkitAudioContext?: typeof AudioContext;
 };
+
+type AuthMode = "login" | "register";
 
 const HISTORY_CACHE_KEY = "smartVoiceHistoryCache";
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("smartVoiceToken") ?? "");
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => readStoredUser());
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [registerEmail, setRegisterEmail] = useState("");
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState("");
   const [session, setSession] = useState<PracticeSession | null>(null);
@@ -36,9 +43,8 @@ export default function App() {
   const [report, setReport] = useState<SessionReport | null>(null);
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [historySessions, setHistorySessions] = useState<PracticeSession[]>([]);
-  const [historyDetail, setHistoryDetail] = useState<SessionDetail | null>(null);
-  const [historyReport, setHistoryReport] = useState<SessionReport | null>(null);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [profileEmail, setProfileEmail] = useState("");
   const [profileLevel, setProfileLevel] = useState("INTERMEDIATE");
   const [isRecording, setIsRecording] = useState(false);
@@ -46,6 +52,7 @@ export default function App() {
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [selectedFeedbackTurnIndex, setSelectedFeedbackTurnIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [recordStartedAt, setRecordStartedAt] = useState<number | null>(null);
 
@@ -58,8 +65,14 @@ export default function App() {
 
   const selectedScenario = scenarios.find((scenario) => scenario.id === selectedScenarioId);
   const scenarioForCreate = selectedScenario ?? scenarios[0];
+  const activeScenario = session
+    ? scenarios.find((scenario) => scenario.id === session.scenarioId) ?? selectedScenario
+    : selectedScenario;
   const latestTurn = turns.length > 0 ? turns[turns.length - 1] : undefined;
+  const feedbackTurn = turns.find((turn) => turn.turnIndex === selectedFeedbackTurnIndex) ?? latestTurn;
   const isSessionCompleted = session?.status === "COMPLETED";
+  const canStartRecording = Boolean(session?.id) && !isBusy && !isCreatingSession && !isSessionCompleted;
+  const visibleHistorySessions = historySessions;
 
   useEffect(() => {
     if (!token) return;
@@ -75,6 +88,15 @@ export default function App() {
     conversationEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns.length, isBusy]);
 
+  function applyAuthSession(auth: Awaited<ReturnType<typeof login>>) {
+    localStorage.setItem("smartVoiceToken", auth.accessToken);
+    localStorage.setItem("smartVoiceUser", JSON.stringify(auth.user));
+    setToken(auth.accessToken);
+    setCurrentUser(auth.user);
+    setProfileEmail(auth.user.email ?? "");
+    setProfileLevel(auth.user.englishLevel ?? "INTERMEDIATE");
+  }
+
   async function handleLogin() {
     setError("");
     if (!username.trim() || !password.trim()) {
@@ -84,14 +106,30 @@ export default function App() {
     setIsBusy(true);
     try {
       const auth = await login(username.trim(), password);
-      localStorage.setItem("smartVoiceToken", auth.accessToken);
-      localStorage.setItem("smartVoiceUser", JSON.stringify(auth.user));
-      setToken(auth.accessToken);
-      setCurrentUser(auth.user);
-      setProfileEmail(auth.user.email ?? "");
-      setProfileLevel(auth.user.englishLevel ?? "INTERMEDIATE");
+      applyAuthSession(auth);
+    } catch {
+      setError("用户名或密码错误");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRegister() {
+    setError("");
+    if (!username.trim() || !password.trim()) {
+      setError("请输入用户名和密码。");
+      return;
+    }
+    if (password.length < 6) {
+      setError("密码至少需要 6 位。");
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const auth = await register(username.trim(), password, registerEmail.trim() || undefined);
+      applyAuthSession(auth);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Register failed");
     } finally {
       setIsBusy(false);
     }
@@ -104,16 +142,21 @@ export default function App() {
     setCurrentUser(null);
     setSession(null);
     setTurns([]);
+    setSelectedFeedbackTurnIndex(null);
     setReport(null);
     setIsReportOpen(false);
     setHistorySessions([]);
-    setHistoryDetail(null);
-    setHistoryReport(null);
-    setIsHistoryOpen(false);
+    setIsAccountMenuOpen(false);
+    setIsProfileOpen(false);
     setError("");
   }
 
-  async function refreshAccountData() {
+  function handleViewProfile() {
+    setIsAccountMenuOpen(false);
+    setIsProfileOpen(true);
+  }
+
+  async function refreshAccountData(sessionToKeep?: PracticeSession) {
     try {
       const [profile, history] = await Promise.all([
         getCurrentUser(token),
@@ -123,7 +166,7 @@ export default function App() {
       localStorage.setItem("smartVoiceUser", JSON.stringify(profile));
       setProfileEmail(profile.email ?? "");
       setProfileLevel(profile.englishLevel ?? "INTERMEDIATE");
-      setHistorySessions(history.records);
+      setHistorySessions(sessionToKeep ? upsertHistorySession(history.records, sessionToKeep) : history.records);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load account data");
     }
@@ -164,36 +207,51 @@ export default function App() {
     }
   }
 
-  async function handleCreateSession() {
-    const scenarioId = selectedScenarioId || scenarioForCreate?.id;
+  function handleScenarioChange(nextScenarioId: string) {
+    setSelectedScenarioId(nextScenarioId);
+    setError("");
+  }
+
+  async function createSessionForSelectedScenario() {
+    const scenario = scenarios.find((item) => item.id === selectedScenarioId) ?? scenarioForCreate;
+    const scenarioId = scenario?.id;
     if (!scenarioId) {
       setError("暂无可用训练场景，请先初始化 scenarios 表数据。");
-      return;
+      return null;
     }
     setError("");
     setIsCreatingSession(true);
-    setReport(null);
-    setIsReportOpen(false);
-    setTurns([]);
     try {
-      const created = await createSession(token, scenarioId, scenarioForCreate?.difficulty ?? "BEGINNER");
-      setSession(created);
-      setSelectedScenarioId(scenarioId);
-      await refreshAccountData();
+      const created = await createSession(token, scenarioId, scenario?.difficulty ?? "BEGINNER");
+      const normalized = normalizePracticeSession(created, scenario);
+      setReport(null);
+      setIsReportOpen(false);
+      setSession(normalized);
+      setSelectedScenarioId(normalized.scenarioId);
+      setTurns([]);
+      setSelectedFeedbackTurnIndex(null);
+      setHistorySessions((current) => upsertHistorySession(current, normalized));
+      await refreshAccountData(normalized);
+      return normalized;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create session");
+      return null;
     } finally {
       setIsCreatingSession(false);
     }
   }
 
+  async function handleCreateSession() {
+    await createSessionForSelectedScenario();
+  }
+
   async function startRecording() {
-    if (!session) {
-      setError("Create a session first.");
+    if (!session?.id) {
+      setError("请先选择场景并创建新对话。");
       return;
     }
     if (isSessionCompleted) {
-      setError("本次会话已生成报告，请创建新会话后继续录音。");
+      setError("本次会话已结课。想继续练习请先创建新对话。");
       return;
     }
     setError("");
@@ -269,6 +327,7 @@ export default function App() {
         cacheSessionDetail(session, nextTurns);
         return nextTurns;
       });
+      setSelectedFeedbackTurnIndex(response.turnIndex);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Voice request failed");
     } finally {
@@ -300,23 +359,52 @@ export default function App() {
     }
   }
 
+  async function handleReportAction() {
+    if (!session) return;
+    if (!isSessionCompleted) {
+      await handleGenerateReport();
+      return;
+    }
+    if (report) {
+      setIsReportOpen(true);
+      return;
+    }
+    setIsBusy(true);
+    setError("");
+    try {
+      const response = await getReport(token, session.id);
+      setReport(response.data);
+      setIsReportOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load report");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function handleOpenHistory(item: PracticeSession) {
     setIsHistoryLoading(true);
     setError("");
     try {
       const detail = await loadSessionDetail(item);
-      setHistoryDetail(detail);
-      if (item.status === "COMPLETED") {
-        try {
-          const reportResponse = await getReport(token, item.id);
-          setHistoryReport(reportResponse.data);
-        } catch {
-          setHistoryReport(null);
-        }
-      } else {
-        setHistoryReport(null);
-      }
-      setIsHistoryOpen(true);
+      const restoredSession: PracticeSession = {
+        id: detail.id,
+        scenarioId: detail.scenarioId,
+        status: detail.status,
+        difficulty: detail.difficulty,
+        startedAt: detail.startedAt,
+        endedAt: detail.endedAt,
+        durationSec: detail.durationSec
+      };
+      const restoredTurns = detail.turns.map((turn) => historyTurnToVoiceTurn(restoredSession.id, turn));
+      setSession(restoredSession);
+      setSelectedScenarioId(restoredSession.scenarioId);
+      setTurns(restoredTurns);
+      setSelectedFeedbackTurnIndex(restoredTurns[restoredTurns.length - 1]?.turnIndex ?? null);
+      setReport(null);
+      setIsReportOpen(false);
+      setIsAccountMenuOpen(false);
+      cacheSessionDetail(restoredSession, restoredTurns);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load history";
       setError(message.includes("Resource not found") || message.includes("No static resource") || message.includes("HTTP 404")
@@ -365,28 +453,70 @@ export default function App() {
   }
 
   if (!token) {
+    const isRegisterMode = authMode === "register";
+
     return (
       <main className="login-page">
         <section className="login-copy">
           <p className="eyebrow">AI 英语口语陪练</p>
-          <h1>进入你的场景口语训练</h1>
-          <p>登录后选择面试、点餐、会议等场景，录音对话并查看发音、纠错和课后总结。</p>
+          <h1>{isRegisterMode ? "创建你的口语训练档案" : "进入你的场景口语训练"}</h1>
+          <p>{isRegisterMode
+            ? "注册后即可选择面试、点餐、会议等场景，开始积累自己的口语练习记录。"
+            : "登录后选择面试、点餐、会议等场景，录音对话并查看发音、纠错和课后总结。"}</p>
         </section>
 
         <section className="login-panel">
-          <h2>登录</h2>
+          <div className="auth-tabs" role="tablist" aria-label="账号入口">
+            <button
+              className={authMode === "login" ? "active" : ""}
+              onClick={() => {
+                setAuthMode("login");
+                setError("");
+              }}
+              type="button"
+              role="tab"
+              aria-selected={authMode === "login"}
+            >
+              登录
+            </button>
+            <button
+              className={authMode === "register" ? "active" : ""}
+              onClick={() => {
+                setAuthMode("register");
+                setError("");
+              }}
+              type="button"
+              role="tab"
+              aria-selected={authMode === "register"}
+            >
+              注册
+            </button>
+          </div>
+          <h2>{isRegisterMode ? "注册账号" : "登录"}</h2>
           {error && <div className="error-strip">{error}</div>}
           <label>
             用户名
             <input value={username} onChange={(event) => setUsername(event.target.value)} />
           </label>
+          {isRegisterMode && (
+            <label>
+              邮箱
+              <input type="email" value={registerEmail} onChange={(event) => setRegisterEmail(event.target.value)} placeholder="可选" />
+            </label>
+          )}
           <label>
             密码
             <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
-          <button onClick={handleLogin} disabled={isBusy || !username.trim() || !password.trim()}>
-            {isBusy ? "登录中..." : "进入训练"}
+          <button
+            onClick={isRegisterMode ? handleRegister : handleLogin}
+            disabled={isBusy || !username.trim() || !password.trim() || (isRegisterMode && password.length < 6)}
+          >
+            {isBusy ? (isRegisterMode ? "注册中..." : "登录中...") : (isRegisterMode ? "创建账号" : "进入训练")}
           </button>
+          <p className="auth-note">
+            {isRegisterMode ? "密码至少 6 位，注册成功后会直接进入训练页面。" : "还没有账号时，可切换到注册创建训练档案。"}
+          </p>
         </section>
       </main>
     );
@@ -394,102 +524,69 @@ export default function App() {
 
   return (
     <main className="shell">
-      <section className="hero-band">
-        <div>
-          <p className="eyebrow">AI 英语口语陪练</p>
-          <h1>场景口语训练工作台</h1>
-        </div>
-        <div className="signal-card">
-          <span>{session ? "会话进行中" : "欢迎回来"}</span>
-          <strong>{turns.length}</strong>
-          <small>轮对话已完成</small>
-        </div>
-      </section>
-
-      <section className="workspace">
-        <aside className="control-panel">
-          <div className="profile-block">
-            <span>欢迎，{currentUser?.username || username}</span>
-            <small>{currentUser?.englishLevel || "ENGLISH"} 训练档案</small>
-            <button className="ghost-button" onClick={handleLogout} disabled={isBusy || isRecording || isProfileSaving || isHistoryLoading || isCreatingSession}>
-              退出登录
-            </button>
-          </div>
-
-          <details className="panel-block profile-editor">
-            <summary>
-              <span>用户资料</span>
-              <small>{isProfileSaving ? "保存中" : "编辑"}</small>
-            </summary>
-            <div className="profile-form">
-              <label>
-                邮箱
-                <input value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} placeholder="可选" disabled={isProfileSaving} />
-              </label>
-              <label>
-                英语等级
-                <select value={profileLevel} onChange={(event) => setProfileLevel(event.target.value)} disabled={isProfileSaving}>
-                  <option value="BEGINNER">BEGINNER</option>
-                  <option value="INTERMEDIATE">INTERMEDIATE</option>
-                  <option value="ADVANCED">ADVANCED</option>
-                </select>
-              </label>
-              <button className="ghost-button" onClick={handleSaveProfile} disabled={isProfileSaving}>
-                {isProfileSaving ? "保存中..." : "保存资料"}
+      <header className="page-header">
+        <h1>AI口语练习</h1>
+        <div className="account-menu account-menu-header">
+          <button
+            className="account-trigger"
+            onClick={() => setIsAccountMenuOpen((current) => !current)}
+            aria-haspopup="menu"
+            aria-expanded={isAccountMenuOpen}
+            aria-label="打开账户菜单"
+            disabled={isBusy || isRecording || isProfileSaving || isHistoryLoading || isCreatingSession}
+          >
+            <span className="account-glyph" aria-hidden="true" />
+          </button>
+          {isAccountMenuOpen && (
+            <div className="account-dropdown" role="menu">
+              <button type="button" role="menuitem" onClick={handleViewProfile}>
+                查看资料
+              </button>
+              <button type="button" role="menuitem" onClick={handleLogout}>
+                退出登录
               </button>
             </div>
-          </details>
-
-          <div className="panel-block">
-            <h2>训练场景</h2>
-            <select value={selectedScenarioId} onChange={(event) => setSelectedScenarioId(event.target.value)}>
-              {scenarios.map((scenario) => createElement("option", { key: scenario.id, value: scenario.id }, scenario.titleCn || scenario.title))}
-            </select>
-            {scenarios.length === 0 && <p className="hint">暂无可用训练场景，请先初始化 scenarios 表数据。</p>}
-            {selectedScenario && <p className="muted">{selectedScenario.description}</p>}
-            {selectedScenario?.suggestedPrompts?.length ? (
-              <div className="prompt-list">
-                <span>可参考表达</span>
-                {selectedScenario.suggestedPrompts.slice(0, 3).map((prompt, index) =>
-                  createElement("p", { key: `prompt-${index}` }, prompt)
-                )}
-              </div>
-            ) : null}
-            <button onClick={handleCreateSession} disabled={isCreatingSession || scenarios.length === 0}>
-              {isCreatingSession ? "创建中..." : "创建会话"}
+          )}
+        </div>
+      </header>
+      <section className="app-workbench">
+        <aside className="history-sidebar">
+          <div className="new-chat-setup">
+            <label>
+              新对话场景
+              <select value={selectedScenarioId} onChange={(event) => handleScenarioChange(event.target.value)} disabled={isCreatingSession || scenarios.length === 0}>
+                {scenarios.map((scenario) => createElement("option", { key: scenario.id, value: scenario.id }, scenario.titleCn || scenario.title))}
+              </select>
+            </label>
+            <button className="new-chat-button" onClick={handleCreateSession} disabled={isCreatingSession || scenarios.length === 0}>
+              <span aria-hidden="true">+</span>
+              {isCreatingSession ? "创建中..." : "新对话"}
             </button>
           </div>
-
-          <div className="panel-block">
-            <h2>录音</h2>
-            <button className={isRecording ? "recording" : ""} onClick={isRecording ? stopRecording : startRecording} disabled={!session || isBusy || isSessionCompleted}>
-              {isRecording ? "停止并上传" : "开始录音"}
+          <div className="sidebar-heading">
+            <span>对话</span>
+            <button className="text-button" onClick={() => void refreshAccountData(session ?? undefined)} disabled={isHistoryLoading}>
+              {isHistoryLoading ? "加载中" : "刷新"}
             </button>
-            <p className="hint">
-              {isSessionCompleted
-                ? "本次会话已结课。要继续练习，请创建新会话。"
-                : "浏览器会录制并转成后端 ASR 要求的 16kHz 单声道 16-bit WAV。"}
-            </p>
           </div>
-
-          <button className="report-button" onClick={handleGenerateReport} disabled={!session || turns.length === 0 || isBusy}>
-            生成课后总结
-          </button>
-
-          <div className="panel-block history-panel">
-            <div className="panel-title-row">
-              <h2>历史记录</h2>
-              <button className="text-button" onClick={refreshAccountData} disabled={isHistoryLoading}>刷新</button>
-            </div>
-            {historySessions.length ? (
-              historySessions.map((item) => {
+          <div className="history-list">
+            {visibleHistorySessions.length ? (
+              visibleHistorySessions.map((item) => {
                 const scenario = scenarios.find((candidate) => candidate.id === item.scenarioId);
+                const cachedDetail = readCachedSessionDetail(item.id);
+                const cachedTurns = cachedDetail?.turns ?? [];
+                const preview = cachedTurns[cachedTurns.length - 1]?.userText || (item.status === "COMPLETED" ? "已生成课后总结" : "继续这次练习");
                 return createElement(
                   "button",
-                  { className: "history-item", key: item.id, onClick: () => void handleOpenHistory(item), disabled: isHistoryLoading },
+                  {
+                    className: `history-item ${session?.id === item.id ? "active" : ""}`,
+                    key: item.id,
+                    onClick: () => void handleOpenHistory(item),
+                    disabled: isHistoryLoading
+                  },
                   <>
                     <span>{scenario?.titleCn || scenario?.title || item.scenarioId}</span>
-                    <small>{item.status} · {item.difficulty}</small>
+                    <small>{preview}</small>
                   </>
                 );
               })
@@ -497,25 +594,38 @@ export default function App() {
               <p className="hint">暂无历史练习。</p>
             )}
           </div>
+          <div className="review-link">复习中心</div>
         </aside>
 
-        <section className="practice-stage">
-          {error && <div className="error-strip">{error}</div>}
-
-          <div className="conversation">
-            <div className="conversation-head">
-              <div>
-                <span className="label">对话区</span>
-                <h2>{selectedScenario?.titleCn || selectedScenario?.title || "请选择训练场景"}</h2>
-              </div>
+        <section className="conversation-panel">
+          <div className="conversation-head">
+            <div>
+              <span className="label">对话</span>
+              <h2>{activeScenario?.titleCn || activeScenario?.title || "请选择训练场景"}</h2>
+            </div>
+            <div className="conversation-tools">
+              <span className="scenario-lock">{session ? "场景已锁定" : "先创建对话"}</span>
               <span className="session-pill">{isSessionCompleted ? "已结课" : session ? "练习中" : "未开始"}</span>
             </div>
+          </div>
 
+          {error && <div className="error-strip">{error}</div>}
+          {scenarios.length === 0 && <p className="hint empty-hint">暂无可用训练场景，请先初始化 scenarios 表数据。</p>}
+
+          <div className="conversation-scroll">
             {turns.length === 0 && (
               <div className="empty-state">
                 <span>01</span>
-                <h2>选择场景后开始录音，完成第一轮真实对话。</h2>
-                <p>页面会展示语音识别文本、AI 回复、TTS 播放、发音评分、语法纠错和课后报告。</p>
+                <h2>先在左侧选好场景，再创建新对话。</h2>
+                <p>{activeScenario?.description || "创建对话后，当前对话的场景会被锁定。想换场景，请重新选择场景并创建新对话。"}</p>
+                {activeScenario?.suggestedPrompts?.length ? (
+                  <div className="prompt-list">
+                    <span>可参考表达</span>
+                    {activeScenario.suggestedPrompts.slice(0, 3).map((prompt, index) =>
+                      createElement("p", { key: `prompt-${index}` }, prompt)
+                    )}
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -528,6 +638,13 @@ export default function App() {
                   <div className="message-bubble">
                     <p>{turn.asr.text || "本轮未识别到有效文本"}</p>
                     <small>ASR confidence {Math.round((turn.asr.confidence ?? 0) * 100)}%</small>
+                    <button
+                      className={`feedback-toggle ${feedbackTurn?.turnIndex === turn.turnIndex ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setSelectedFeedbackTurnIndex(turn.turnIndex)}
+                    >
+                      查看反馈
+                    </button>
                   </div>
                 </div>
               ),
@@ -558,47 +675,61 @@ export default function App() {
             <div ref={conversationEndRef} />
           </div>
 
-          <div className="insight-rail">
-            <ScoreDial label="Overall" value={latestTurn?.pronunciation.overallScore ?? 0} />
-            <ScoreDial label="Pronunciation" value={latestTurn?.pronunciation.pronunciationScore ?? 0} />
-            <ScoreDial label="Grammar" value={latestTurn?.correction.grammarScore ?? 0} />
-            <ScoreDial label="Expression" value={latestTurn?.correction.expressionScore ?? 0} />
-
-            <div className="feedback-box">
-              <h3>发音建议</h3>
-              {latestTurn?.pronunciation.suggestions.length ? (
-                latestTurn.pronunciation.suggestions.map((item, index) =>
-                  createElement("p", { key: `pronunciation-${index}` }, item)
-                )
-              ) : (
-                <p>完成一轮录音后查看发音反馈。</p>
-              )}
-              {latestTurn?.pronunciation.issues.length ? (
-                latestTurn.pronunciation.issues.map((item, index) =>
-                  createElement("p", { key: `issue-${index}` }, `${item.target}: ${item.message}`)
-                )
-              ) : null}
-            </div>
-
-            <div className="feedback-box">
-              <h3>纠错与表达</h3>
-              {latestTurn?.correction.overallFeedback && <p>{latestTurn.correction.overallFeedback}</p>}
-              {latestTurn?.correction.corrections.length ? (
-                latestTurn.correction.corrections.map((item: NonNullable<Turn["correction"]["corrections"]>[number], index: number) =>
-                  createElement("p", { key: `${item.type}-${index}` }, <><strong>{item.original}</strong> -&gt; {item.corrected}</>)
-                )
-              ) : (
-                <p>完成一轮录音后查看语法与表达纠错。</p>
-              )}
-              {latestTurn?.correction.betterExpressions.length ? (
-                latestTurn.correction.betterExpressions.map((item, index) =>
-                  createElement("p", { key: `expression-${index}` }, item)
-                )
-              ) : null}
-            </div>
-
+          <div className="record-dock">
+            <button className={`record-button ${isRecording ? "recording" : ""}`} onClick={isRecording ? stopRecording : startRecording} disabled={!isRecording && !canStartRecording}>
+              {isRecording ? "停止并上传" : session ? "开始录音" : "先创建对话"}
+            </button>
+            <button className="report-button" onClick={handleReportAction} disabled={!session || isBusy || (!isSessionCompleted && turns.length === 0)}>
+              {isSessionCompleted ? "查看课后总结" : "生成课后总结"}
+            </button>
           </div>
         </section>
+
+        <aside className="insight-rail">
+          <div className="assistant-head">
+            <div>
+              <span className="label">AI 辅导</span>
+              <h2>练习反馈</h2>
+            </div>
+          </div>
+
+          <div className="score-grid">
+            <ScoreDial label="Overall" value={feedbackTurn?.pronunciation.overallScore ?? 0} />
+            <ScoreDial label="Pronunciation" value={feedbackTurn?.pronunciation.pronunciationScore ?? 0} />
+            <ScoreDial label="Grammar" value={feedbackTurn?.correction.grammarScore ?? 0} />
+            <ScoreDial label="Expression" value={feedbackTurn?.correction.expressionScore ?? 0} />
+          </div>
+
+          <div className="feedback-box selected-sentence-box">
+            <h3>当前句子</h3>
+            {feedbackTurn ? (
+              <p>{feedbackTurn.asr.text || "本轮未识别到有效文本"}</p>
+            ) : (
+              <p>点击某条消息的“查看反馈”，这里会显示对应句子的反馈。</p>
+            )}
+          </div>
+
+          <div className="feedback-box">
+            <h3>发音建议</h3>
+            {feedbackTurn?.pronunciation.suggestions.length ? (
+              feedbackTurn.pronunciation.suggestions.map((item, index) =>
+                createElement("p", { key: `pronunciation-${index}` }, item)
+              )
+            ) : (
+              <p>完成一轮录音后查看发音反馈。</p>
+            )}
+            {feedbackTurn?.pronunciation.issues.length ? (
+              feedbackTurn.pronunciation.issues.map((item, index) =>
+                createElement("p", { key: `issue-${index}` }, `${item.target}: ${item.message}`)
+              )
+            ) : null}
+          </div>
+
+          <div className="feedback-box">
+            <h3>纠错与表达</h3>
+            <CorrectionFeedback turn={feedbackTurn} />
+          </div>
+        </aside>
       </section>
 
       {report && isReportOpen && (
@@ -632,60 +763,48 @@ export default function App() {
         </div>
       )}
 
-      {historyDetail && isHistoryOpen && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="history-title">
-          <section className="report-modal history-modal">
-            <button className="modal-close" onClick={() => setIsHistoryOpen(false)} aria-label="关闭历史记录">
+      {isProfileOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+          <section className="report-modal profile-modal">
+            <button className="modal-close" onClick={() => setIsProfileOpen(false)} aria-label="关闭用户资料">
               ×
             </button>
             <div className="report-header">
-              <span className="label">历史记录</span>
-              <h2 id="history-title">历史对话回看</h2>
-              <p>{historyDetail.status} · {historyDetail.difficulty} · {historyDetail.turns.length} 轮对话</p>
+              <span className="label">用户资料</span>
+              <h2 id="profile-title">训练档案</h2>
+              <p>查看账号信息，并维护用于个性化练习的英语等级。</p>
             </div>
-            <div className="history-dialogue">
-              {historyDetail.turns.length ? (
-                historyDetail.turns.flatMap((turn) => [
-                  createElement(
-                    "div",
-                    { className: "message-row user-message", key: `${turn.id}-user` },
-                    <div className="message-stack">
-                      <span className="message-name">我</span>
-                      <div className="message-bubble"><p>{turn.userText}</p></div>
-                    </div>
-                  ),
-                  createElement(
-                    "div",
-                    { className: "message-row assistant-message", key: `${turn.id}-assistant` },
-                    <div className="message-stack">
-                      <span className="message-name">AI 陪练</span>
-                      <div className="message-bubble"><p>{turn.aiText}</p></div>
-                    </div>
-                  )
-                ])
-              ) : (
-                <p className="hint">这次会话还没有保存的对话内容。完成一轮录音/对话后，历史记录才会显示用户问题和 AI 回复。</p>
-              )}
-            </div>
-            {historyReport && (
-              <div className="history-report">
-                <h3>历史报告</h3>
-                <p>{historyReport.teacherComment}</p>
-                <div className="report-columns">
-                  <div>
-                    <h3>优势</h3>
-                    {parseJsonList(historyReport.strengths).map((item, index) => createElement("p", { key: `history-strength-${index}` }, item))}
-                  </div>
-                  <div>
-                    <h3>待提升</h3>
-                    {parseJsonList(historyReport.weaknesses).map((item, index) => createElement("p", { key: `history-weakness-${index}` }, item))}
-                  </div>
-                </div>
+            <div className="profile-card">
+              <div>
+                <span>用户名</span>
+                <strong>{currentUser?.username || username}</strong>
               </div>
-            )}
+              <div>
+                <span>当前等级</span>
+                <strong>{currentUser?.englishLevel || profileLevel}</strong>
+              </div>
+            </div>
+            <div className="profile-form">
+              <label>
+                邮箱
+                <input value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} placeholder="可选" disabled={isProfileSaving} />
+              </label>
+              <label>
+                英语等级
+                <select value={profileLevel} onChange={(event) => setProfileLevel(event.target.value)} disabled={isProfileSaving}>
+                  <option value="BEGINNER">BEGINNER</option>
+                  <option value="INTERMEDIATE">INTERMEDIATE</option>
+                  <option value="ADVANCED">ADVANCED</option>
+                </select>
+              </label>
+              <button className="ghost-button" onClick={handleSaveProfile} disabled={isProfileSaving}>
+                {isProfileSaving ? "保存中..." : "保存资料"}
+              </button>
+            </div>
           </section>
         </div>
       )}
+
     </main>
   );
 }
@@ -697,7 +816,10 @@ function turnToHistory(turn: Turn): ConversationTurnHistory {
     userText: turn.asr.text || "本轮未识别到有效文本",
     aiText: turn.aiText,
     pronunciationScore: turn.pronunciation.pronunciationScore,
-    fluencyScore: turn.pronunciation.fluencyScore
+    fluencyScore: turn.pronunciation.fluencyScore,
+    grammarIssues: turn.correction.corrections.length
+      ? JSON.stringify(turn.correction.corrections)
+      : turn.correction.overallFeedback
   };
 }
 
@@ -709,6 +831,20 @@ function cacheSessionDetail(session: PracticeSession, turns: Turn[]) {
     turns: turns.map(turnToHistory)
   };
   localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(cache));
+}
+
+function normalizePracticeSession(session: PracticeSession, scenario: Scenario): PracticeSession {
+  return {
+    ...session,
+    id: session.id,
+    scenarioId: session.scenarioId || scenario.id,
+    status: session.status || "ACTIVE",
+    difficulty: session.difficulty || scenario.difficulty || "BEGINNER"
+  };
+}
+
+function upsertHistorySession(sessions: PracticeSession[], session: PracticeSession) {
+  return [session, ...sessions.filter((item) => item.id !== session.id)];
 }
 
 function readCachedSessionDetail(sessionId: string): SessionDetail | null {
@@ -724,6 +860,159 @@ function readHistoryCache(): Record<string, SessionDetail> {
     localStorage.removeItem(HISTORY_CACHE_KEY);
     return {};
   }
+}
+
+function historyTurnToVoiceTurn(sessionId: string, turn: ConversationTurnHistory): Turn {
+  const pronunciationScore = Number(turn.pronunciationScore ?? 0);
+  const fluencyScore = Number(turn.fluencyScore ?? 0);
+  const overallScore = pronunciationScore || fluencyScore
+    ? Math.round((pronunciationScore + fluencyScore) / (pronunciationScore && fluencyScore ? 2 : 1))
+    : 0;
+  const words = turn.userText.trim().split(/\s+/).filter(Boolean);
+  const corrections = parseCorrectionItems(turn.grammarIssues);
+
+  return {
+    sessionId,
+    turnIndex: turn.turnIndex,
+    asr: {
+      text: turn.userText,
+      confidence: 0,
+      durationMs: 0,
+      finalResult: true
+    },
+    aiText: turn.aiText,
+    tts: {
+      text: turn.aiText,
+      voice: "",
+      format: "",
+      mimeType: "",
+      durationMs: 0,
+      audioContentBase64: ""
+    },
+    pronunciation: {
+      pronunciationScore,
+      fluencyScore,
+      paceScore: 0,
+      overallScore,
+      wordCount: words.length,
+      wordsPerMinute: 0,
+      suggestions: [],
+      issues: []
+    },
+    correction: {
+      correctedText: turn.userText,
+      grammarScore: corrections.length ? 70 : 0,
+      expressionScore: 0,
+      overallFeedback: buildNaturalFeedback(turn.grammarIssues, corrections),
+      corrections,
+      betterExpressions: []
+    }
+  };
+}
+
+function CorrectionFeedback({ turn }: { turn?: Turn }) {
+  if (!turn) {
+    return <p>点击某条消息的“查看反馈”，这里会显示对应句子的纠错与表达建议。</p>;
+  }
+
+  const corrections = turn.correction.corrections.length
+    ? turn.correction.corrections
+    : parseCorrectionItems(turn.correction.overallFeedback);
+  const feedback = buildNaturalFeedback(turn.correction.overallFeedback, corrections);
+
+  return (
+    <>
+      <p>{feedback}</p>
+      {corrections.length ? (
+        <div className="correction-list">
+          {corrections.map((item, index) => (
+            <div className="correction-card" key={`${item.type}-${item.original}-${index}`}>
+              <span>{correctionTypeLabel(item.type)}</span>
+              <strong>{formatCorrectionSuggestion(item)}</strong>
+              {item.explanation && <p>{item.explanation}</p>}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {turn.correction.betterExpressions.length ? (
+        <div className="expression-list">
+          <span>更自然的表达</span>
+          {turn.correction.betterExpressions.map((item, index) =>
+            createElement("p", { key: `expression-${index}` }, item)
+          )}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function parseCorrectionItems(raw?: string): CorrectionItem[] {
+  if (!raw || !looksLikeJson(raw)) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    const source: unknown[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.corrections)
+        ? parsed.corrections
+        : [];
+    return source.map(coerceCorrectionItem).filter((item): item is CorrectionItem => Boolean(item));
+  } catch {
+    return [];
+  }
+}
+
+function coerceCorrectionItem(value: any): CorrectionItem | null {
+  if (!value || typeof value !== "object") return null;
+  const original = stringValue(value.original);
+  const corrected = stringValue(value.corrected);
+  const explanation = stringValue(value.explanation);
+  if (!original && !corrected && !explanation) return null;
+  return {
+    type: stringValue(value.type) || "expression",
+    original,
+    corrected,
+    explanation,
+    severity: stringValue(value.severity) || "medium"
+  };
+}
+
+function buildNaturalFeedback(raw: string | undefined, corrections: CorrectionItem[]) {
+  if (corrections.length > 0) {
+    return corrections.length === 1
+      ? "这句话有 1 处可以优化，下面是具体建议。"
+      : `这句话有 ${corrections.length} 处可以优化，下面是具体建议。`;
+  }
+  if (raw && !looksLikeJson(raw)) {
+    return raw;
+  }
+  return "这句话暂时没有发现明显的语法或表达问题。";
+}
+
+function formatCorrectionSuggestion(item: CorrectionItem) {
+  if (item.original && item.corrected) {
+    return `建议把 “${item.original}” 改成 “${item.corrected}”。`;
+  }
+  if (item.corrected) {
+    return `可以表达为 “${item.corrected}”。`;
+  }
+  return "这处表达可以再自然一些。";
+}
+
+function correctionTypeLabel(type: string) {
+  const normalized = type.toLowerCase();
+  if (normalized.includes("spell")) return "拼写建议";
+  if (normalized.includes("punct")) return "标点建议";
+  if (normalized.includes("grammar")) return "语法建议";
+  return "表达建议";
+}
+
+function looksLikeJson(value: string) {
+  const trimmed = value.trim();
+  return trimmed.startsWith("[") || trimmed.startsWith("{");
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function ScoreDial({ label, value }: { label: string; value: number }) {
