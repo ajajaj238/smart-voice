@@ -48,6 +48,8 @@ CREATE TABLE conversation_turns (
     ai_text             TEXT,
     user_audio_url      VARCHAR(500),
     ai_audio_url        VARCHAR(500),
+    asr_confidence      DECIMAL(4,3),
+    asr_duration_ms     INT,
     pronunciation_score DECIMAL(3,1),
     fluency_score       DECIMAL(3,1),
     grammar_issues      JSON,

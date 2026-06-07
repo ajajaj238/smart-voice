@@ -48,6 +48,8 @@ export type ConversationTurnHistory = {
   turnIndex: number;
   userText: string;
   aiText: string;
+  asrConfidence?: number;
+  asrDurationMs?: number;
   pronunciationScore?: number;
   fluencyScore?: number;
   grammarIssues?: string;
