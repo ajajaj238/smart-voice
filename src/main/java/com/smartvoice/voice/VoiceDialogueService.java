@@ -15,13 +15,14 @@ import com.smartvoice.voice.asr.AsrService;
 import com.smartvoice.voice.dto.AsrResponse;
 import com.smartvoice.voice.dto.TtsResponse;
 import com.smartvoice.voice.dto.VoiceDialogueResponse;
-import com.smartvoice.voice.tts.TtsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Service
@@ -29,7 +30,6 @@ import java.math.BigDecimal;
 public class VoiceDialogueService {
 
     private final AsrService asrService;
-    private final TtsService ttsService;
     private final ChatService chatService;
     private final PronunciationService pronunciationService;
     private final CorrectionService correctionService;
@@ -49,25 +49,71 @@ public class VoiceDialogueService {
     ) {
         validateSessionCanAcceptVoice(sessionId, userId);
         AsrResponse asr = asrService.transcribe(audio, transcriptHint, language, durationMs);
-        PronunciationResult pronunciation = pronunciationService.evaluate(
-                asr.text(),
-                referenceText,
-                asr.durationMs()
-        );
-        CorrectionResult correction = correctionService.correct(asr.text(), "voice dialogue", "intermediate");
         ConversationTurn turn = chatService.processMessage(sessionId, asr.text(), userId);
-        TtsResponse tts = ttsService.synthesize(turn.getAiText(), voice, "wav");
-        enrichTurn(turn, pronunciation, correction);
+        enrichTurnWithAsr(turn, asr);
+        runAsyncAnalysis(turn, asr, referenceText);
 
         return new VoiceDialogueResponse(
                 sessionId,
                 turn.getTurnIndex(),
                 asr,
                 turn.getAiText(),
-                tts,
-                pronunciation,
-                correction
+                pendingTts(turn.getAiText(), voice),
+                pendingPronunciation(),
+                pendingCorrection(asr.text())
         );
+    }
+
+    private void runAsyncAnalysis(ConversationTurn turn, AsrResponse asr, String referenceText) {
+        CompletableFuture.runAsync(() -> {
+            PronunciationResult pronunciation = pendingPronunciation();
+            CorrectionResult correction = pendingCorrection(asr.text());
+            try {
+                pronunciation = pronunciationService.evaluate(
+                        asr.text(),
+                        referenceText,
+                        asr.durationMs()
+                );
+            } catch (Exception e) {
+                log.warn("Async pronunciation analysis failed. turnId={}", turn.getId(), e);
+            }
+            try {
+                correction = correctionService.correct(asr.text(), "voice dialogue", "intermediate");
+            } catch (Exception e) {
+                log.warn("Async correction analysis failed. turnId={}", turn.getId(), e);
+            }
+            try {
+                enrichTurn(turn, pronunciation, correction);
+            } catch (Exception e) {
+                log.warn("Async turn enrichment failed. turnId={}", turn.getId(), e);
+            }
+        });
+
+    }
+
+    private TtsResponse pendingTts(String text, String voice) {
+        return new TtsResponse(text == null ? "" : text, voice, "wav", "audio/wav", 0, "");
+    }
+
+    private PronunciationResult pendingPronunciation() {
+        return new PronunciationResult(0, 0, 0, 0, 0, 0, List.of(), List.of(),
+                List.of("发音反馈生成中，稍后会自动更新。"));
+    }
+
+    private CorrectionResult pendingCorrection(String text) {
+        String safeText = text == null ? "" : text;
+        return new CorrectionResult(safeText, safeText, 0, 0, List.of(), List.of(),
+                "纠错与表达反馈生成中，稍后会自动更新。");
+    }
+
+    private void enrichTurnWithAsr(ConversationTurn turn, AsrResponse asr) {
+        try {
+            turn.setAsrConfidence(BigDecimal.valueOf(asr.confidence()));
+            turn.setAsrDurationMs(asr.durationMs());
+            turnMapper.updateById(turn);
+        } catch (Exception e) {
+            log.warn("Failed to enrich conversation turn ASR metadata. turnId={}", turn.getId(), e);
+        }
     }
 
     public void validateSessionCanAcceptVoice(String sessionId, String userId) {

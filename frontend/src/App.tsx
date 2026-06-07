@@ -11,6 +11,7 @@ import {
   login,
   register,
   sendVoiceDialogue,
+  synthesizeSpeech,
   updateCurrentUser
 } from "./api";
 import type { ConversationTurnHistory, PracticeSession, Scenario, SessionDetail, SessionReport, UserProfile, VoiceDialogueResponse } from "./types";
@@ -70,6 +71,7 @@ export default function App() {
     : selectedScenario;
   const latestTurn = turns.length > 0 ? turns[turns.length - 1] : undefined;
   const feedbackTurn = turns.find((turn) => turn.turnIndex === selectedFeedbackTurnIndex) ?? latestTurn;
+  const isFeedbackPreparing = Boolean(feedbackTurn) && !isTurnFeedbackReady(feedbackTurn);
   const isSessionCompleted = session?.status === "COMPLETED";
   const canStartRecording = Boolean(session?.id) && !isBusy && !isCreatingSession && !isSessionCompleted;
   const visibleHistorySessions = historySessions;
@@ -328,11 +330,68 @@ export default function App() {
         return nextTurns;
       });
       setSelectedFeedbackTurnIndex(response.turnIndex);
+      void refreshTurnAnalysis(session.id, response.turnIndex);
+      void refreshTurnAudio(session.id, response.turnIndex, response.aiText);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Voice request failed");
     } finally {
       setIsBusy(false);
       setRecordStartedAt(null);
+    }
+  }
+
+  async function refreshTurnAudio(sessionId: string, turnIndex: number, aiText: string) {
+    if (!aiText.trim()) return;
+    try {
+      const tts = await synthesizeSpeech(token, aiText, "zhixiaobai");
+      const audioUrl = tts.audioContentBase64
+        ? base64ToAudioUrl(tts.audioContentBase64, tts.mimeType)
+        : undefined;
+      setTurns((current) => {
+        const nextTurns = current.map((turn) => {
+          if (turn.sessionId !== sessionId || turn.turnIndex !== turnIndex) return turn;
+          return { ...turn, tts, audioUrl };
+        });
+        const currentSession = session?.id === sessionId ? session : null;
+        if (currentSession) {
+          cacheSessionDetail(currentSession, nextTurns);
+        }
+        return nextTurns;
+      });
+    } catch {
+      // Text reply should stay visible even if audio synthesis is slow or unavailable.
+    }
+  }
+
+  async function refreshTurnAnalysis(sessionId: string, turnIndex: number, attempts = 8) {
+    if (attempts <= 0) return;
+    await delay(1200);
+    try {
+      const detail = await getSessionDetail(token, sessionId);
+      const updatedTurn = detail.turns.find((turn) => turn.turnIndex === turnIndex);
+      if (!updatedTurn) {
+        void refreshTurnAnalysis(sessionId, turnIndex, attempts - 1);
+        return;
+      }
+      let isUpdated = false;
+      setTurns((current) => {
+        const nextTurns = current.map((turn) => {
+          if (turn.sessionId !== sessionId || turn.turnIndex !== turnIndex) return turn;
+          const merged = mergeTurnAnalysis(turn, updatedTurn);
+          isUpdated = merged !== turn;
+          return merged;
+        });
+        const currentSession = session?.id === sessionId ? session : null;
+        if (currentSession) {
+          cacheSessionDetail(currentSession, nextTurns);
+        }
+        return nextTurns;
+      });
+      if (!hasCompletedTurnAnalysis(updatedTurn) || !isUpdated) {
+        void refreshTurnAnalysis(sessionId, turnIndex, attempts - 1);
+      }
+    } catch {
+      void refreshTurnAnalysis(sessionId, turnIndex, attempts - 1);
     }
   }
 
@@ -446,6 +505,8 @@ export default function App() {
         turnIndex: turn.turnIndex,
         userText: turn.asr.text || "本轮未识别到有效文本",
         aiText: turn.aiText,
+        asrConfidence: turn.asr.confidence,
+        asrDurationMs: turn.asr.durationMs,
         pronunciationScore: turn.pronunciation.pronunciationScore,
         fluencyScore: turn.pronunciation.fluencyScore
       }))
@@ -637,7 +698,7 @@ export default function App() {
                   <span className="message-name">我</span>
                   <div className="message-bubble">
                     <p>{turn.asr.text || "本轮未识别到有效文本"}</p>
-                    <small>ASR confidence {Math.round((turn.asr.confidence ?? 0) * 100)}%</small>
+                    <small>{formatAsrConfidence(turn.asr.confidence)}</small>
                     <button
                       className={`feedback-toggle ${feedbackTurn?.turnIndex === turn.turnIndex ? "active" : ""}`}
                       type="button"
@@ -693,42 +754,52 @@ export default function App() {
             </div>
           </div>
 
-          <div className="score-grid">
-            <ScoreDial label="Overall" value={feedbackTurn?.pronunciation.overallScore ?? 0} />
-            <ScoreDial label="Pronunciation" value={feedbackTurn?.pronunciation.pronunciationScore ?? 0} />
-            <ScoreDial label="Grammar" value={feedbackTurn?.correction.grammarScore ?? 0} />
-            <ScoreDial label="Expression" value={feedbackTurn?.correction.expressionScore ?? 0} />
-          </div>
+          {isFeedbackPreparing ? (
+            <div className="feedback-loading">
+              <span>反馈准备中</span>
+              <h3>正在分析这句话的发音、语法与表达</h3>
+              <p>{feedbackTurn?.asr.text || "请稍等，反馈准备好后会自动展示关键指标。"}</p>
+            </div>
+          ) : (
+            <>
+              <div className="score-grid">
+                <ScoreDial label="Overall" value={feedbackTurn?.pronunciation.overallScore ?? 0} />
+                <ScoreDial label="Pronunciation" value={feedbackTurn?.pronunciation.pronunciationScore ?? 0} />
+                <ScoreDial label="Grammar" value={feedbackTurn?.correction.grammarScore ?? 0} />
+                <ScoreDial label="Expression" value={feedbackTurn?.correction.expressionScore ?? 0} />
+              </div>
 
-          <div className="feedback-box selected-sentence-box">
-            <h3>当前句子</h3>
-            {feedbackTurn ? (
-              <p>{feedbackTurn.asr.text || "本轮未识别到有效文本"}</p>
-            ) : (
-              <p>点击某条消息的“查看反馈”，这里会显示对应句子的反馈。</p>
-            )}
-          </div>
+              <div className="feedback-box selected-sentence-box">
+                <h3>当前句子</h3>
+                {feedbackTurn ? (
+                  <p>{feedbackTurn.asr.text || "本轮未识别到有效文本"}</p>
+                ) : (
+                  <p>点击某条消息的“查看反馈”，这里会显示对应句子的反馈。</p>
+                )}
+              </div>
 
-          <div className="feedback-box">
-            <h3>发音建议</h3>
-            {feedbackTurn?.pronunciation.suggestions.length ? (
-              feedbackTurn.pronunciation.suggestions.map((item, index) =>
-                createElement("p", { key: `pronunciation-${index}` }, item)
-              )
-            ) : (
-              <p>完成一轮录音后查看发音反馈。</p>
-            )}
-            {feedbackTurn?.pronunciation.issues.length ? (
-              feedbackTurn.pronunciation.issues.map((item, index) =>
-                createElement("p", { key: `issue-${index}` }, `${item.target}: ${item.message}`)
-              )
-            ) : null}
-          </div>
+              <div className="feedback-box">
+                <h3>发音建议</h3>
+                {feedbackTurn?.pronunciation.suggestions.length ? (
+                  feedbackTurn.pronunciation.suggestions.map((item, index) =>
+                    createElement("p", { key: `pronunciation-${index}` }, item)
+                  )
+                ) : (
+                  <p>完成一轮录音后查看发音反馈。</p>
+                )}
+                {feedbackTurn?.pronunciation.issues.length ? (
+                  feedbackTurn.pronunciation.issues.map((item, index) =>
+                    createElement("p", { key: `issue-${index}` }, `${item.target}: ${item.message}`)
+                  )
+                ) : null}
+              </div>
 
-          <div className="feedback-box">
-            <h3>纠错与表达</h3>
-            <CorrectionFeedback turn={feedbackTurn} />
-          </div>
+              <div className="feedback-box">
+                <h3>纠错与表达</h3>
+                <CorrectionFeedback turn={feedbackTurn} />
+              </div>
+            </>
+          )}
         </aside>
       </section>
 
@@ -815,6 +886,8 @@ function turnToHistory(turn: Turn): ConversationTurnHistory {
     turnIndex: turn.turnIndex,
     userText: turn.asr.text || "本轮未识别到有效文本",
     aiText: turn.aiText,
+    asrConfidence: turn.asr.confidence,
+    asrDurationMs: turn.asr.durationMs,
     pronunciationScore: turn.pronunciation.pronunciationScore,
     fluencyScore: turn.pronunciation.fluencyScore,
     grammarIssues: turn.correction.corrections.length
@@ -862,6 +935,56 @@ function readHistoryCache(): Record<string, SessionDetail> {
   }
 }
 
+function mergeTurnAnalysis(current: Turn, updated: ConversationTurnHistory): Turn {
+  if (!hasCompletedTurnAnalysis(updated)) {
+    return current;
+  }
+  const analyzed = historyTurnToVoiceTurn(current.sessionId, {
+    ...updated,
+    userText: updated.userText || current.asr.text,
+    aiText: updated.aiText || current.aiText
+  });
+  return {
+    ...current,
+    pronunciation: hasPronunciationScore(updated)
+      ? {
+          ...current.pronunciation,
+          pronunciationScore: analyzed.pronunciation.pronunciationScore,
+          fluencyScore: analyzed.pronunciation.fluencyScore,
+          overallScore: analyzed.pronunciation.overallScore,
+          wordCount: analyzed.pronunciation.wordCount,
+          suggestions: analyzed.pronunciation.suggestions
+        }
+      : current.pronunciation,
+    correction: hasGrammarFeedback(updated) ? analyzed.correction : current.correction
+  };
+}
+
+function hasCompletedTurnAnalysis(turn: ConversationTurnHistory) {
+  return hasPronunciationScore(turn) || hasGrammarFeedback(turn);
+}
+
+function hasPronunciationScore(turn: ConversationTurnHistory) {
+  return Number(turn.pronunciationScore ?? 0) > 0
+    || Number(turn.fluencyScore ?? 0) > 0;
+}
+
+function hasGrammarFeedback(turn: ConversationTurnHistory) {
+  const feedback = turn.grammarIssues?.trim();
+  return Boolean(feedback && !feedback.includes("反馈生成中"));
+}
+
+function isTurnFeedbackReady(turn?: Turn) {
+  if (!turn) return false;
+  return turn.pronunciation.pronunciationScore > 0
+    || turn.pronunciation.fluencyScore > 0
+    || !turn.correction.overallFeedback.includes("反馈生成中");
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function historyTurnToVoiceTurn(sessionId: string, turn: ConversationTurnHistory): Turn {
   const pronunciationScore = Number(turn.pronunciationScore ?? 0);
   const fluencyScore = Number(turn.fluencyScore ?? 0);
@@ -876,8 +999,8 @@ function historyTurnToVoiceTurn(sessionId: string, turn: ConversationTurnHistory
     turnIndex: turn.turnIndex,
     asr: {
       text: turn.userText,
-      confidence: 0,
-      durationMs: 0,
+      confidence: Number(turn.asrConfidence ?? 0),
+      durationMs: Number(turn.asrDurationMs ?? 0),
       finalResult: true
     },
     aiText: turn.aiText,
@@ -896,7 +1019,7 @@ function historyTurnToVoiceTurn(sessionId: string, turn: ConversationTurnHistory
       overallScore,
       wordCount: words.length,
       wordsPerMinute: 0,
-      suggestions: [],
+      suggestions: buildPronunciationSuggestions(pronunciationScore, fluencyScore),
       issues: []
     },
     correction: {
@@ -988,6 +1111,26 @@ function buildNaturalFeedback(raw: string | undefined, corrections: CorrectionIt
   return "这句话暂时没有发现明显的语法或表达问题。";
 }
 
+function buildPronunciationSuggestions(pronunciationScore: number, fluencyScore: number) {
+  if (!pronunciationScore && !fluencyScore) {
+    return [];
+  }
+  const suggestions: string[] = [];
+  if (pronunciationScore >= 85) {
+    suggestions.push("整体发音清晰，可以继续保持当前的语音稳定度。");
+  } else if (pronunciationScore >= 70) {
+    suggestions.push("发音基本清楚，建议放慢一点语速，把关键词的重音说得更完整。");
+  } else {
+    suggestions.push("建议先分句慢读，再重点练习容易含糊的单词发音。");
+  }
+  if (fluencyScore >= 85) {
+    suggestions.push("流利度表现不错，可以尝试用更自然的停顿来增强表达节奏。");
+  } else if (fluencyScore > 0) {
+    suggestions.push("流利度还有提升空间，可以先想好句子结构，再一次性说完整。");
+  }
+  return suggestions;
+}
+
 function formatCorrectionSuggestion(item: CorrectionItem) {
   if (item.original && item.corrected) {
     return `建议把 “${item.original}” 改成 “${item.corrected}”。`;
@@ -1013,6 +1156,12 @@ function looksLikeJson(value: string) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function formatAsrConfidence(confidence?: number) {
+  return confidence && confidence > 0
+    ? `ASR confidence ${Math.round(confidence * 100)}%`
+    : "ASR confidence --";
 }
 
 function ScoreDial({ label, value }: { label: string; value: number }) {

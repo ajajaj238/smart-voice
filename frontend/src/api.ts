@@ -6,6 +6,7 @@ import type {
   Scenario,
   SessionDetail,
   SessionReport,
+  TtsResponse,
   UserProfile,
   VoiceDialogueResponse
 } from "./types";
@@ -117,6 +118,14 @@ export function sendVoiceDialogue(params: {
     method: "POST",
     token: params.token,
     body: formData
+  });
+}
+
+export function synthesizeSpeech(token: string, text: string, voice?: string, format = "wav") {
+  return request<TtsResponse>("/api/v1/voice/tts", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ text, voice, format })
   });
 }
 
